@@ -31,5 +31,10 @@ def get_args_from_input():
 	parser.add_argument('--eps', type=float, help='epsilon hyperparameter for DIGL')
 	parser.add_argument('--dataset', type=str, help='name of dataset to use')
 	parser.add_argument('--last_layer_fa', type=str, help='whether or not to make last layer fully adjacent')
+	
+	#sheaf args
+	parser.add_argument('--d', type=int, help='dimension of stalks for sheaf models')
+	parser.add_argument('--gnn_type', type=str, help='type of GNN to learn restriction maps')
+	parser.add_argument('--gnn_layers', type=int, help='number of layers of GNN used to learn restriction maps')
 	arg_values = parser.parse_args()
 	return AttrDict(vars(arg_values))
