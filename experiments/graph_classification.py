@@ -29,7 +29,7 @@ default_args = AttrDict(
     "hidden_layers": None,
     "num_layers": 1,
     "batch_size": 64,
-    "layer_type": "R-GCN",
+    "layer_type": "Sheaf",
     "num_relations": 2,
     "last_layer_fa": False
     }
@@ -37,7 +37,8 @@ default_args = AttrDict(
 
 class Experiment:
     def __init__(self, args=None, dataset=None, train_dataset=None, validation_dataset=None, test_dataset=None):
-        self.args = default_args + args
+        #self.args = default_args + args
+        self.args = self.add_extra_args(args, default_args)
         self.dataset = dataset
         self.train_dataset = train_dataset
         self.validation_dataset = validation_dataset
@@ -45,20 +46,25 @@ class Experiment:
         self.loss_fn = torch.nn.CrossEntropyLoss()
 
         if self.args.device is None:
-            self.args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            #self.args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            self.args.update({"device": torch.device('cuda' if torch.cuda.is_available() else 'cpu')}, allow_val_change=True)
         if self.args.hidden_layers is None:
-            self.args.hidden_layers = [self.args.hidden_dim] * self.args.num_layers
+            #self.args.hidden_layers = [self.args.hidden_dim] * self.args.num_layers
+            self.args.update({"hidden_layers": [self.args.hidden_dim] * self.args.num_layers}, allow_val_change=True)
         if self.args.input_dim is None:
-            self.args.input_dim = self.dataset[0].x.shape[1]
+            #self.args.input_dim = self.dataset[0].x.shape[1]
+            self.args.update({"input_dim": self.dataset[0].x.shape[1]}, allow_val_change=True)
         for graph in self.dataset:
-            if not "edge_type" in graph.keys:
+            if not "edge_type" in graph.keys():
                 num_edges = graph.edge_index.shape[1]
                 graph.edge_type = torch.zeros(num_edges, dtype=int)
         if self.args.num_relations is None:
             if self.args.rewiring == "None":
-                self.args.num_relations = 1
+                #self.args.num_relations = 1
+                self.args.update({"num_relations": 1}, allow_val_change=True)
             else:
-                self.args.num_relations = 2
+                #self.args.num_relations = 2
+                self.args.update({"num_relations": 2}, allow_val_change=True)
         self.model = GNN(self.args).to(self.args.device)
        
         # randomly assign a train/validation/test split, or train/validation split if test already assigned
@@ -72,7 +78,14 @@ class Experiment:
             train_size = int(self.args.train_fraction * len(self.train_dataset))
             validation_size = len(self.args.train_data) - train_size
             self.args.train_data, self.args.validation_data = random_split(self.args.train_data, [train_size, validation_size])
-        
+
+    def add_extra_args(self, args, new_args):
+        for key in new_args:
+            if key not in args:
+                args.update({key: new_args[key]}, allow_val_change=True)
+        return args
+
+
     def run(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
         scheduler = ReduceLROnPlateau(optimizer)
@@ -95,13 +108,17 @@ class Experiment:
             total_loss = 0
             optimizer.zero_grad()
 
+            reff_per_epoch_sum_layer = torch.zeros((self.model.num_layers), device=self.args.device)
+
             for graph in train_loader:
                 graph = graph.to(self.args.device)
                 y = graph.y.to(self.args.device)
 
-                out = self.model(graph)
+                out, reff_per_layer = self.model(graph)
                 loss = self.loss_fn(input=out, target=y)
                 total_loss += loss
+                reff_per_epoch_sum_layer += reff_per_layer
+                #loss = # - reff_per_layer.sum()
                 loss.backward()
                 optimizer.step()
                 optimizer.zero_grad()
@@ -142,17 +159,17 @@ class Experiment:
                         epochs_no_improve += 1
                     else:
                         epochs_no_improve += 1
-                if self.args.display:
-                    print(f'Epoch {epoch}, Train acc: {train_acc}, Validation acc: {validation_acc}{new_best_str}, Test acc: {test_acc}')
+                if self.args.display and epoch % 10 == 0:
+                    print(f'Epoch {epoch}, Train acc: {train_acc}, Validation acc: {validation_acc}{new_best_str}, Test acc: {test_acc}')#, Effective Resistance: {reff_per_epoch_sum_layer}')
                 if epochs_no_improve > self.args.patience:
                     if self.args.display:
                         print(f'{self.args.patience} epochs without improvement, stopping training')
                         print(f'Best train acc: {best_train_acc}, Best validation loss: {best_validation_acc}, Best test loss: {best_test_acc}')
                     energy = self.check_dirichlet(loader=complete_loader)
                     return train_acc, validation_acc, test_acc, energy
-        if self.args.display:
-            print('Reached max epoch count, stopping training')
-            print(f'Best train acc: {best_train_acc}, Best validation loss: {best_validation_acc}, Best test loss: {best_test_acc}')
+        #if self.args.display:
+        print('Reached max epoch count, stopping training')
+        print(f'Best train acc: {best_train_acc}, Best validation loss: {best_validation_acc}, Best test loss: {best_test_acc}')
         energy = self.check_dirichlet(loader=complete_loader)
         return train_acc, validation_acc, test_acc, energy
 
@@ -164,7 +181,7 @@ class Experiment:
             for graph in loader:
                 graph = graph.to(self.args.device)
                 y = graph.y.to(self.args.device)
-                out = self.model(graph)
+                out, _ = self.model(graph)
                 _, pred = out.max(dim=1)
                 total_correct += pred.eq(y).sum().item()
                 
