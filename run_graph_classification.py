@@ -12,6 +12,12 @@ import pandas as pd
 from hyperparams import get_args_from_input
 from preprocessing import rewiring, sdrf, fosr, digl
 
+from tqdm import tqdm
+from torch_geometric.utils import get_laplacian
+from scipy.linalg import pinv
+
+import wandb
+
 mutag = list(TUDataset(root="data", name="MUTAG"))
 enzymes = list(TUDataset(root="data", name="ENZYMES"))
 proteins = list(TUDataset(root="data", name="PROTEINS"))
@@ -20,7 +26,24 @@ imdb = list(TUDataset(root="data", name="IMDB-BINARY"))
 reddit = list(TUDataset(root="data", name="REDDIT-BINARY"))
 datasets = {"reddit": reddit, "imdb": imdb, "mutag": mutag, "enzymes": enzymes, "proteins": proteins, "collab": collab}
 #datasets = {"proteins": proteins, "collab": collab}
+#datasets = {"mutag": mutag}
+#datasets ={"enzymes": enzymes}
+#datasets = {"proteins": proteins}
+#datasets = {"imdb": imdb}
+#datasets = {"collab": collab}
+#datasets = {"reddit": reddit}
+
+def get_laplacian_pseudoinverse(data_list, data_name=None):
+    for example in tqdm(data_list, total=len(data_list), desc=f"Getting Laplacian pseudoinverses and traces for {data_name}", unit="graph"):
+        laplacian = get_laplacian(example.edge_index)
+        L_G = to_dense_adj(laplacian[0], edge_attr=laplacian[1])[0].to(torch.float64)
+        
+        L_G_pinv = pinv(L_G.detach().numpy())
+        example.L_G_pinv = L_G_pinv
+        example.R = L_G_pinv.shape[0] * np.trace(L_G_pinv)
+
 for key in datasets:
+    #get_laplacian_pseudoinverse(datasets[key], key)
     if key in ["reddit", "imdb", "collab"]:
         for graph in datasets[key]:
             n = graph.num_nodes
@@ -42,11 +65,11 @@ def log_to_file(message, filename="results/graph_classification.txt"):
     file.close()
 
 default_args = AttrDict({
-    "dropout": 0.5,
+    "dropout": 0.0,
     "num_layers": 4,
     "hidden_dim": 64,
     "learning_rate": 1e-3,
-    "layer_type": "R-GCN",
+    "layer_type": "Sheaf",
     "display": False,
     "num_trials": 100,
     "eval_every": 1,
@@ -59,6 +82,12 @@ default_args = AttrDict({
     "dataset": None,
     "last_layer_fa": False
     })
+
+sheaf_args = AttrDict({
+    "d": 5,
+    "gnn_type": "GIN",
+    "gnn_layers": 1
+})
 
 hyperparams = {
     "mutag": AttrDict({"output_dim": 2}),
@@ -76,6 +105,8 @@ if args.dataset:
     # restricts to just the given dataset if this mode is chosen
     name = args.dataset
     datasets = {name: datasets[name]}
+
+wandb.init(project="SheafEffectiveResistance", config=args, allow_val_change=True)
 
 for key in datasets:
     args += hyperparams[key]
@@ -100,7 +131,8 @@ for key in datasets:
             dataset[i].edge_type = torch.tensor(np.zeros(m, dtype=np.int64))
     #spectral_gap = average_spectral_gap(dataset)
     for trial in range(args.num_trials):
-        train_acc, validation_acc, test_acc, energy = Experiment(args=args, dataset=dataset).run()
+        train_acc, validation_acc, test_acc, energy = Experiment(args=wandb.config, dataset=dataset).run()
+        wandb.log({"train_acc": train_acc, "validation_acc": validation_acc, "test_acc": test_acc}, step=trial)
         train_accuracies.append(train_acc)
         validation_accuracies.append(validation_acc)
         test_accuracies.append(test_acc)
@@ -113,9 +145,14 @@ for key in datasets:
     val_ci = 200 * np.std(validation_accuracies)/(args.num_trials ** 0.5)
     test_ci = 200 * np.std(test_accuracies)/(args.num_trials ** 0.5)
     energy_ci = 200 * np.std(energies)/(args.num_trials ** 0.5)
-    log_to_file(f"RESULTS FOR {key} ({args.rewiring}), {args.num_iterations} ITERATIONS:\n")
-    log_to_file(f"average acc: {test_mean}\n")
-    log_to_file(f"plus/minus:  {test_ci}\n\n")
+    # log_to_file(f"RESULTS FOR {key} ({args.rewiring}), {args.num_iterations} ITERATIONS:\n")
+    # log_to_file(f"average acc: {test_mean}\n")
+    # log_to_file(f"plus/minus:  {test_ci}\n\n")
+    print(f"RESULTS FOR {key} ({args.rewiring}), {args.num_iterations} ITERATIONS:\n")
+    print(f"average acc: {test_mean}\n")
+    print(f"plus/minus:  {test_ci}\n\n")
+    wandb.log({"avg_val_acc": val_mean, "avg_test_acc": test_mean, "test_acc_std": test_ci})
+    wandb.finish()
     results.append({
         "dataset": key,
         "rewiring": args.rewiring,
@@ -133,6 +170,6 @@ for key in datasets:
         "energy_ci": energy_ci,
         "last_layer_fa": args.last_layer_fa
         })
-df = pd.DataFrame(results)
-with open('results/graph_classification_fa.csv', 'a') as f:
-    df.to_csv(f, mode='a', header=f.tell()==0)
+# df = pd.DataFrame(results)
+# with open('results/graph_classification_fa.csv', 'a') as f:
+#     df.to_csv(f, mode='a', header=f.tell()==0)
