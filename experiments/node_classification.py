@@ -34,20 +34,23 @@ default_args = AttrDict(
 
 class Experiment:
     def __init__(self, args=None, dataset=None, train_mask=None, validation_mask=None, test_mask=None):
-        self.args = default_args + args
+        #self.args = default_args + args
+        self.args = self.add_extra_args(args, default_args)
         self.dataset = dataset
         self.train_mask = train_mask
         self.validation_mask = validation_mask
         self.test_mask = test_mask
         self.loss_fn = torch.nn.CrossEntropyLoss()
-        self.args.input_dim = self.dataset[0].x.shape[1]
-        self.args.output_dim = torch.amax(self.dataset[0].y).item() + 1
+        self.args.update({"input_dim": self.dataset[0].x.shape[1]})
+        self.args.update({"output_dim": torch.amax(self.dataset[0].y).item() + 1})
         self.num_nodes = self.dataset[0].x.size(axis=0)
 
         if self.args.device is None:
-            self.args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            #self.args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            self.args.update({"device": torch.device('cuda' if torch.cuda.is_available() else 'cpu')}, allow_val_change=True)
         if self.args.hidden_layers is None:
-            self.args.hidden_layers = [self.args.hidden_dim] * self.args.num_layers
+            #self.args.hidden_layers = [self.args.hidden_dim] * self.args.num_layers
+            self.args.update({"hidden_layers": [self.args.hidden_dim] * self.args.num_layers}, allow_val_change=True)
 
         self.model = GCN(self.args).to(self.args.device)
 
@@ -60,7 +63,13 @@ class Experiment:
         elif self.validation_mask is None:
             non_test = [i for i in range(self.num_nodes) if not i in self.test_mask]
             self.train_mask, self.validation_mask = train_test_split(non_test, test_size=self.args.validation_fraction/(self.args.validation_fraction + self.args.train_fraction))
-        
+
+    def add_extra_args(self, args, new_args):
+        for key in new_args:
+            if key not in args:
+                args.update({key: new_args[key]}, allow_val_change=True)
+        return args  
+
     def run(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
         scheduler = ReduceLROnPlateau(optimizer,  patience=25)

@@ -9,6 +9,12 @@ import pandas as pd
 from hyperparams import get_args_from_input
 from preprocessing import rewiring, sdrf, fosr
 
+from tqdm import tqdm
+from torch_geometric.utils import get_laplacian
+from scipy.linalg import pinv
+
+import wandb
+
 largest_cc = LargestConnectedComponents()
 
 
@@ -61,8 +67,11 @@ if args.dataset:
     datasets = {name: datasets[name]}
 
 for key in datasets:
-    accuracies = []
-    print(f"TESTING: {key} ({default_args.rewiring})")
+    wandb.init(project="SheafEffectiveResistance", config=args, allow_val_change=True)
+    train_accuracies = []
+    validation_accuracies = []
+    test_accuracies = []
+    print(f"TESTING: {key} ({default_args.rewiring}) with {args.layer_type} model")
     dataset = datasets[key]
     if args.rewiring == "fosr":
         edge_index, edge_type, _ = fosr.edge_rewire(dataset.data.edge_index.numpy(), num_iterations=args.num_iterations)
@@ -73,19 +82,34 @@ for key in datasets:
     #print(rewiring.spectral_gap(to_networkx(dataset.data, to_undirected=True)))
     for trial in range(args.num_trials):
         #print(f"TRIAL {trial+1}")
-        train_acc, validation_acc, test_acc = Experiment(args=args, dataset=dataset).run()
-        accuracies.append(test_acc)
-
-    log_to_file(f"RESULTS FOR {key} ({default_args.rewiring}):\n")
-    log_to_file(f"average acc: {np.mean(accuracies)}\n")
-    log_to_file(f"plus/minus:  {2 * np.std(accuracies)/(args.num_trials ** 0.5)}\n\n")
+        print(args)
+        train_acc, validation_acc, test_acc = Experiment(args=wandb.config, dataset=dataset).run()
+        train_accuracies.append(train_acc)
+        validation_accuracies.append(validation_acc)
+        test_accuracies.append(test_acc)
+    
+    train_mean = 100 * np.mean(train_accuracies)
+    val_mean = 100 * np.mean(validation_accuracies)
+    test_mean = 100 * np.mean(test_accuracies)
+    train_ci = 200 * np.std(train_accuracies)/(args.num_trials ** 0.5)
+    val_ci = 200 * np.std(validation_accuracies)/(args.num_trials ** 0.5)
+    test_ci = 200 * np.std(test_accuracies)/(args.num_trials ** 0.5)
+    # log_to_file(f"RESULTS FOR {key} ({default_args.rewiring}):\n")
+    # log_to_file(f"average acc: {np.mean(accuracies)}\n")
+    # log_to_file(f"plus/minus:  {2 * np.std(accuracies)/(args.num_trials ** 0.5)}\n\n")
+    
+    print(f"RESULTS FOR {key} ({default_args.rewiring}):\n")
+    print(f"average acc: {test_mean}\n")
+    print(f"plus/minus:  {test_ci}\n\n")
+    wandb.log({"avg_val_acc": val_mean, "avg_test_acc": test_mean, "test_acc_std": test_ci})
+    wandb.finish()
     results.append({
         "dataset": key,
         "rewiring": args.rewiring,
         "num_iterations": args.num_iterations,
-        "avg_accuracy": np.mean(accuracies),
-        "ci":  2 * np.std(accuracies)/(args.num_trials ** 0.5)
+        "avg_accuracy": test_mean,
+        "ci":  test_ci
         })
-    results_df = pd.DataFrame(results)
-    with open('results/node_classification.csv', 'a') as f:
-        results_df.to_csv(f, mode='a', header=f.tell()==0)
+    # results_df = pd.DataFrame(results)
+    # with open('results/node_classification.csv', 'a') as f:
+    #     results_df.to_csv(f, mode='a', header=f.tell()==0)
