@@ -43,7 +43,7 @@ def get_laplacian_pseudoinverse(data_list, data_name=None):
         example.R = L_G_pinv.shape[0] * np.trace(L_G_pinv)
 
 for key in datasets:
-    #get_laplacian_pseudoinverse(datasets[key], key)
+    # get_laplacian_pseudoinverse(datasets[key], key)
     if key in ["reddit", "imdb", "collab"]:
         for graph in datasets[key]:
             n = graph.num_nodes
@@ -106,15 +106,15 @@ if args.dataset:
     name = args.dataset
     datasets = {name: datasets[name]}
 
-wandb.init(project="SheafEffectiveResistance", config=args, allow_val_change=True)
-
 for key in datasets:
+    # get_laplacian_pseudoinverse(datasets[key], key)
     args += hyperparams[key]
+    wandb.init(project="SheafEffectiveResistance", config=args, allow_val_change=True)
     train_accuracies = []
     validation_accuracies = []
     test_accuracies = []
     energies = []
-    print(f"TESTING: {key} ({args.rewiring})")
+    print(f"TESTING: {key} ({args.rewiring}) with {args.layer_type} model")
     dataset = datasets[key]
     if args.rewiring == "fosr":
         for i in range(len(dataset)):
