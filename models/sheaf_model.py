@@ -35,6 +35,242 @@ TensorTriplet = Tuple[Tensor, Tensor, Tensor]
 Linear = nn.Linear
 Identity = nn.Identity
 
+class FlatGenSheafConv(MessagePassing):
+    r"""The flat bundle convolutional operator. The main model is from 
+    the `"Neural Sheaf Diffusion: A Topological Perspective on Heterophily
+    and Oversmoothing in GNNs" <https://arxiv.org/pdf/2202.04579>`_ paper,
+    with the simplification of the sheaf structure proposed by the
+    `"Bundle Neural Networks for message diffusion on graphs"
+    <https://arxiv.org/pdf/2405.15540>`_ paper.
+
+    Args:
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
+        stalk_dimension (int, optional): Dimension of the sheaf stalks. (default :obj:`2`)
+        left_weights (bool, optional): If True, applies left weights to the features. (default :obj:`True`)
+        right_weights (bool, optional): If True, applies right weights to the features. (default :obj:`True`)
+        use_eps (bool, optional): If True, uses the adjusted residual connection. (default :obj:`True`)
+        dropout (float, optional): Dropout probability of the layer. (default :obj:`0.0`)
+        use_bias (bool, optional): Add bias in the weights. (default :obj:`False`)
+        sheaf_act (str, optional): Activation function applied on the sheaf maps. (default :obj:`'tanh'`)
+        orth_trans (str, optional): Method to learn orthogonal maps. Options are
+            :obj:`'householder'`, :obj:`'matrix_exp'`, :obj:`'cayley'`, or
+            :obj:`'euler'`. The  :obj:`'euler'` method can only be used if stalk_dimension is 2 or 3. (default :obj:`'householder'`)
+        nsd_learner (bool, optional): Use the NSD sheaf learner (a linear layer) instead of an MLP/GNN. (default :obj:`True`)
+        linear_emb (bool, optional): Use a linear+act embedding/readout when learning the sheaf. (default :obj:`True`)
+        gnn_type (str, optional): Type of GNN to use for learning the sheaf. Options are
+            :obj:`'SAGE'`, :obj:`'GCN'`, :obj:`'GAT'`, :obj:`'NNConv'`, :obj:`'SGC'`, or :obj:`'SumGNN'`. (default :obj:`'SAGE'`)
+        gnn_layers (int, optional): Number of GNN layers to use for learning the sheaf. (default :obj:`1`)
+        gnn_hidden (int, optional): Number of hidden channels in the GNN layers. (default :obj:`32`)
+        gnn_default (int, optional): Set this to 0 to use a custom GNN to learn the restriction maps.
+            To reproduce the experiments in the paper, use either 1 or 2. (default :obj:`False`)
+        gnn_residual (bool, optional): Use residual connections in the GNN layers. (default :obj:`False`)
+        pe_size (int, optional): Size of the positional encoding to use in the GNN layers. (default :obj:`0`)
+    """
+
+    def __init__(self,
+                 in_channels:  int,
+                 out_channels: int,
+                 stalk_dimension: Optional[int]  = 2,
+                 left_weights:    Optional[bool] = True,
+                 right_weights:   Optional[bool] = True,
+                 use_eps:         Optional[bool] = True,
+                 dropout:         Optional[float] = 0.0,
+                 use_bias:        Optional[bool] = False,
+                 sheaf_act:       Optional[str]  = 'tanh',
+                 orth_trans:      Optional[str]  = 'householder',
+                 nsd_learner:     Optional[bool] = True,
+                 linear_emb:      Optional[bool] = True,
+                 gnn_type:        Optional[str]  = 'SAGE',
+                 gnn_layers:      Optional[int]  = 1,
+                 gnn_hidden:      Optional[int]  = 32,
+                 gnn_default:     Optional[bool] = False,
+                 gnn_residual:    Optional[bool] = False,
+                 pe_size:         Optional[int]  = 0,
+                 ):
+        MessagePassing.__init__(self, aggr='add',
+                                flow='target_to_source',
+                                node_dim=0)
+
+        self.d = stalk_dimension
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.right_weights = right_weights
+        self.left_weights = left_weights
+        self.use_eps = use_eps
+        self.dropout = dropout
+        self.orth_trans = orth_trans
+        self.nsd_learner = nsd_learner
+
+        if in_channels != out_channels:
+            assert right_weights, \
+            f'The right_weights changes from in_channels to out_channels \
+            Either set right_weights=True or ensure in_channels == out_channels.'
+
+        if self.right_weights:
+            self.lin_right_weights = nn.Linear(self.in_channels,
+                                               self.out_channels,
+                                               bias=use_bias)
+            nn.init.orthogonal_(self.lin_right_weights.weight.data)
+        else:
+            self.lin_right_weights = nn.Identity()
+
+        if self.left_weights:
+            self.lin_left_weights = nn.Linear(self.d,
+                                              self.d,
+                                              bias=use_bias)
+            nn.init.eye_(self.lin_left_weights.weight.data)
+        else:
+            self.lin_left_weights = nn.Identity()
+        
+        if nsd_learner:
+            self.sheaf_learner = LocalConcatFlatSheafLearnerVariant(
+                self.d, self.in_channels,
+                out_shape = (self.d**2,),
+                sheaf_act = sheaf_act)
+
+        else:
+            self.sheaf_learner = ConformalSheafLearner(
+                    self.d,
+                    self.in_channels,
+                    out_shape = (self.d**2,),
+                    linear_emb = linear_emb,
+                    gnn_type = gnn_type,
+                    gnn_layers = gnn_layers,
+                    gnn_hidden = gnn_hidden,
+                    gnn_default = gnn_default,
+                    gnn_residual = gnn_residual,
+                    pe_size = pe_size,
+                    sheaf_act = sheaf_act)
+        
+        if use_eps and in_channels == out_channels:
+            self.epsilons = nn.Parameter(torch.zeros((self.d, 1)))
+    
+    def sheaf_effective_resistance(self, data, maps):
+        """
+        LG_pinv : (B,n,n)
+        F_maps  : (B,n,d,d)
+        Returns R_tot: (B,)
+        """
+        R = data.torch_R
+        L_G_pinv = data.torch_L_G_pinv
+        L_G_pinv = L_G_pinv.view(R.size(0), L_G_pinv.size(1), -1)
+        B, n, d = R.size(0), L_G_pinv.size(1), maps.size(-1)
+        ones = torch.ones(d, dtype=maps.dtype, device=maps.device)
+
+        # S[b,i,:] solves F[b,i].T @ S[b,i,:] = 1
+        S, *_ = torch.linalg.lstsq( maps.transpose(-1,-2), ones.expand(B*n,d) )  # (B,n,d)
+        S = S.view(B,n,d)
+        
+        L_G_pinv = 0.5 * (L_G_pinv + L_G_pinv.transpose(-1, -2))
+        evals, U = torch.linalg.eigh(L_G_pinv)                       # (B,n), (B,n,n)
+        evals = torch.clamp(evals, min=0.0)                         # kill tiny negatives
+        LG_pinv_psd = (U * evals.unsqueeze(-2)) @ U.transpose(-1, -2)
+
+        Cprime = torch.matmul(S, S.transpose(-1,-2))           # (B,n,n)
+        K = LG_pinv_psd * Cprime
+        #K = 0.5 * (K.transpose(-2,-1) + K)                                # Hadamard
+
+        trK  = K.diagonal(dim1=-2, dim2=-1).sum(-1)
+        sumK = K.sum(dim=(-2,-1))
+        Rtot = (n * trK - sumK).sum()
+        #print(f"Effective Resistance: {Rtot} and shape {Rtot.shape}")
+        return Rtot
+        
+    def batched_sym_matrix_pow(self, matrices: torch.Tensor, p: float) -> torch.Tensor:
+        r"""
+        Power of a matrix using Eigen Decomposition.
+        Args:
+            matrices: A batch of matrices.
+            p: Power.
+            positive_definite: If positive definite
+        Returns:
+            Power of each matrix in the batch.
+        """
+        # vals, vecs = torch.linalg.eigh(matrices)
+        # SVD is much faster than  vals, vecs = torch.linalg.eigh(matrices) for large batches.
+        vecs, vals, _ = torch.linalg.svd(matrices)
+        good = vals > vals.max(-1, True).values * vals.size(-1) * torch.finfo(vals.dtype).eps
+        vals = vals.pow(p).where(good, torch.zeros((), device=matrices.device, dtype=matrices.dtype))
+        matrix_power = (vecs * vals.unsqueeze(-2)) @ torch.transpose(vecs, -2, -1)
+        return matrix_power
+    
+    def restriction_maps_builder(self, maps : Tensor, edge_index : Tensor):
+        row, _ = edge_index
+
+        maps = maps.view(-1, self.d, self.d)
+
+        deg = degree(row, num_nodes=self.graph_size) + 1
+
+        diag_maps = (maps.transpose(-2,-1) @ maps) * deg.view(-1, 1, 1)
+
+        # if self.training:
+        #     # During training, we perturb the matrices to ensure they have different singular values.
+        #     # Without this, the gradients of batched_sym_matrix_pow, which uses SVD are non-finite.
+        #     eps = torch.FloatTensor(self.d).uniform_(-0.001, 0.001).to(device=self.device)
+        # else:
+        #     eps = torch.zeros(self.d, device=self.device)
+
+        to_be_inv_diag_maps = diag_maps #+ torch.diag(1. + eps).unsqueeze(0) #if self.augmented else diag_maps
+        diag_sqrt_inv = self.batched_sym_matrix_pow(to_be_inv_diag_maps, -0.5)
+
+        norm_D = (diag_sqrt_inv @ diag_maps @ diag_sqrt_inv).clamp(min=-1, max=1)
+
+        return norm_D, maps, diag_sqrt_inv
+    
+    def left_right_linear(self, x: Tensor, left: Linear | Identity,
+                          right: Linear | Identity) -> Tensor:
+        x = x.t().reshape(-1, self.d)
+        x = left(x)
+        x = x.reshape(-1, self.graph_size * self.d).t()
+
+        x = right(x)
+        return x
+    
+    def forward(self, x: Tensor, edge_index: Tensor, data=None, reff=False):
+        self.graph_size = x.size(0)
+
+        assert x.view(self.graph_size, -1).size(1) == self.in_channels * self.d, \
+            f'Expected input size {self.in_channels * self.d}, got {x.view(self.graph_size, -1).size(1)}. \
+            Are you embedding graph features into sheaf features?'
+        
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x_maps = x.reshape(self.graph_size, self.in_channels * self.d)
+
+        maps = self.sheaf_learner(x_maps) if self.nsd_learner else self.sheaf_learner(x_maps, edge_index)
+
+        x = x.view(self.graph_size * self.d, -1)
+        x0 = x
+
+        D, maps, diag_sqrt_inv = self.restriction_maps_builder(maps, edge_index)
+
+        x = self.left_right_linear(x, self.lin_left_weights, self.lin_right_weights)
+        x = x.reshape(self.graph_size, self.d, self.out_channels)
+
+        deg = degree(edge_index[0], num_nodes=self.graph_size) + 1
+        Dx = D @ x * deg.pow(-1)[:, None, None]
+        Fx = (maps @ diag_sqrt_inv).clamp(min=-1, max=1) @ x
+        x = self.propagate(edge_index, x=Fx, diag=Dx, Ft=(diag_sqrt_inv @ maps.transpose(-2,-1)).clamp(min=-1, max=1))
+        x = F.dropout(x, p=self.dropout, training=self.training)
+
+        #if self.use_act:
+        x = F.gelu(x)
+
+        if self.use_eps and self.in_channels == self.out_channels:
+            x = x.view(self.graph_size * self.d, -1)
+            x0 = (1 + torch.tanh(self.epsilons).tile(self.graph_size, 1)) * x0 - x
+            x = x0
+
+        if reff:
+            efec_res = self.sheaf_effective_resistance(data, maps.detach())
+
+        return x.view(self.graph_size, -1), efec_res if reff else 0
+
+    def message(self, x_j, diag_i, Ft_i):
+        msg = Ft_i @ x_j
+
+        return diag_i - msg
+
 class FlatBundleConv(MessagePassing):
     r"""The flat bundle convolutional operator. The main model is from 
     the `"Neural Sheaf Diffusion: A Topological Perspective on Heterophily

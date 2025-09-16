@@ -1,6 +1,6 @@
 project: FlatBundle_OVSQ
-name: mutag
-program: run_graph_classification.py
+name: chameleon
+program: run_node_classification.py
 method: grid
 
 metric:
@@ -11,7 +11,7 @@ parameters:
   rewiring:
     value: "None"
   layer_type:
-    value: "Sheaf"
+    value: "GenSheaf"
   d:
     values: [2,3,4,5]
   gnn_type:
@@ -23,6 +23,6 @@ command:
   - ${env}
   - "python"
   - ${program}
-  - "--dataset=mutag"
+  - "--dataset=chameleon"
   - ${args}
 

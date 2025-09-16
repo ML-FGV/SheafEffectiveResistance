@@ -141,7 +141,7 @@ class Experiment:
                         epochs_no_improve += 1
                     else:
                         epochs_no_improve += 1
-                if self.args.display:
+                if self.args.display and epoch % 10 == 0:
                     print(f'Epoch {epoch}, Train acc: {train_acc}, Validation acc: {validation_acc}{new_best_str}, Test acc: {test_acc}')
                 if epochs_no_improve > self.args.patience:
                     if self.args.display:

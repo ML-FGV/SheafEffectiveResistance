@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn import ModuleList, Dropout, ReLU
 from torch_geometric.nn import GCNConv, RGCNConv, SAGEConv, GINConv, FiLMConv, global_mean_pool
-from models.sheaf_model import FlatBundleConv
+from models.sheaf_model import FlatBundleConv, FlatGenSheafConv
 
 class RGINConv(torch.nn.Module):
     def __init__(self, in_features, out_features, num_relations):
@@ -31,7 +31,7 @@ class GCN(torch.nn.Module):
         num_features = [args.input_dim] + list(args.hidden_layers) + [args.output_dim]
         self.num_layers = len(num_features) - 1
         layers = []
-        if self.layer_type != "Sheaf":
+        if "Sheaf" not in self.layer_type:
             for i, (in_features, out_features) in enumerate(zip(num_features[:-1], num_features[1:])):
                 layers.append(self.get_layer(in_features, out_features))
         else:
@@ -66,7 +66,17 @@ class GCN(torch.nn.Module):
                                   stalk_dimension=self.args.d,
                                   dropout=self.args.dropout,
                                   nsd_learner=False,
-                                  linear_emb=True,
+                                  linear_emb=False,
+                                  gnn_type=self.args.gnn_type,
+                                  gnn_layers=self.args.gnn_layers,
+                                  gnn_hidden=self.args.hidden_dim)
+        elif self.layer_type == "GenSheaf":
+            return FlatGenSheafConv(in_channels=in_features,
+                                  out_channels=out_features,
+                                  stalk_dimension=self.args.d,
+                                  dropout=self.args.dropout,
+                                  nsd_learner=True,
+                                  linear_emb=False,
                                   gnn_type=self.args.gnn_type,
                                   gnn_layers=self.args.gnn_layers,
                                   gnn_hidden=self.args.hidden_dim)
@@ -77,20 +87,20 @@ class GCN(torch.nn.Module):
     def forward(self, graph):
         x, edge_index = graph.x, graph.edge_index
         reff_per_layer = torch.zeros((self.num_layers,), device=x.device)
-        if self.layer_type == "Sheaf":
+        if "Sheaf" in self.layer_type:
             x = self.sheaf_emb(x)
             x = torch.nn.functional.gelu(x)
         for i, layer in enumerate(self.layers):
             reff = False
             if self.layer_type in ["R-GCN", "R-GIN"]:
                 x = layer(x, edge_index, edge_type=graph.edge_type)
-            elif self.layer_type == "Sheaf":
+            elif "Sheaf" in self.layer_type:
                 x, reff_per_layer[i] = layer(x, edge_index, graph, reff=reff)
             else:
                 x = layer(x, edge_index)
             if i != self.num_layers - 1:
                 x = self.act_fn(x)
                 x = self.dropout(x)
-        if self.layer_type == "Sheaf":
+        if "Sheaf" in self.layer_type:
             x = self.sheaf_readout(x)
         return x

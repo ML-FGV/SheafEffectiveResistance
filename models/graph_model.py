@@ -3,7 +3,7 @@ import torch.nn as nn
 from measure_smoothing import dirichlet_normalized
 from torch.nn import ModuleList, Dropout, ReLU
 from torch_geometric.nn import GCNConv, RGCNConv, SAGEConv, GATConv, GatedGraphConv, GINConv, FiLMConv, global_mean_pool
-from models.sheaf_model import FlatBundleConv
+from models.sheaf_model import FlatBundleConv, FlatGenSheafConv
 
 class RGATConv(torch.nn.Module):
     def __init__(self, in_features, out_features, num_relations):
@@ -50,7 +50,7 @@ class GNN(torch.nn.Module):
         num_features = [args.input_dim] + list(args.hidden_layers) + [args.output_dim]
         self.num_layers = len(num_features) - 1
         layers = []
-        if self.layer_type != "Sheaf":
+        if "Sheaf" not in self.layer_type:
             for i, (in_features, out_features) in enumerate(zip(num_features[:-1], num_features[1:])):
                 layers.append(self.get_layer(in_features, out_features))
         else:
@@ -60,7 +60,7 @@ class GNN(torch.nn.Module):
         self.dropout = Dropout(p=args.dropout)
         self.act_fn = ReLU()
 
-        if self.layer_type == "Sheaf":
+        if "Sheaf" in self.layer_type:
             self.sheaf_emb = nn.Linear(num_features[0], num_features[1]*args.d)
 
         if self.args.last_layer_fa:
@@ -69,7 +69,7 @@ class GNN(torch.nn.Module):
                 self.last_layer_transform = torch.nn.Linear(self.args.hidden_dim, self.args.output_dim)
             elif self.layer_type == "R-GIN" or self.layer_type == "GIN":
                 self.last_layer_transform = nn.Sequential(nn.Linear(self.args.hidden_dim, self.args.hidden_dim),nn.BatchNorm1d(self.args.hidden_dim), nn.ReLU(),nn.Linear(self.args.hidden_dim, self.args.output_dim))
-            elif self.layer_type == "Sheaf":
+            elif "Sheaf" in self.layer_type:
                 self.last_layer_transform = torch.nn.Linear(self.args.hidden_dim * self.args.d, self.args.output_dim)
             else:
                 raise NotImplementedError
@@ -101,23 +101,34 @@ class GNN(torch.nn.Module):
                                   gnn_type=self.args.gnn_type,
                                   gnn_layers=self.args.gnn_layers,
                                   gnn_hidden=self.args.hidden_dim)
+        elif self.layer_type == "GenSheaf":
+            return FlatGenSheafConv(in_channels=in_features,
+                                  out_channels=out_features,
+                                  stalk_dimension=self.args.d,
+                                  dropout=self.args.dropout,
+                                  nsd_learner=False,
+                                  linear_emb=True,
+                                  gnn_type=self.args.gnn_type,
+                                  gnn_layers=self.args.gnn_layers,
+                                  gnn_hidden=self.args.hidden_dim)
+
 
     def forward(self, graph, measure_dirichlet=False):
         x, edge_index, ptr, batch = graph.x, graph.edge_index, graph.ptr, graph.batch
         x = x.float()
         reff_per_layer = torch.zeros((self.num_layers,), device=x.device)
-        if self.layer_type == "Sheaf":
+        if "Sheaf" in self.layer_type:
             x = self.sheaf_emb(x)
             x = torch.nn.functional.gelu(x)
         for i, layer in enumerate(self.layers):
             reff = False#True if i == self.num_layers - 1 and self.training else False
             if self.layer_type in ["R-GCN", "R-GAT", "R-GIN", "FiLM"]:
                 x_new = layer(x, edge_index, edge_type=graph.edge_type)
-            elif self.layer_type == "Sheaf":
+            elif "Sheaf" in self.layer_type:
                 x_new, reff_per_layer[i] = layer(x, edge_index, graph, reff=reff)
             else:
                 x_new = layer(x, edge_index)
-            if i != self.num_layers - 1 and self.layer_type != "Sheaf":
+            if i != self.num_layers - 1 and "Sheaf" not in self.layer_type:
                 x_new = self.act_fn(x_new)
                 x_new = self.dropout(x_new)
             if i == self.num_layers - 1 and self.args.last_layer_fa:
@@ -134,6 +145,6 @@ class GNN(torch.nn.Module):
             energy = dirichlet_normalized(x.cpu().numpy(), graph.edge_index.cpu().numpy())
             return energy
         x = global_mean_pool(x, batch)
-        if self.layer_type == "Sheaf":
+        if "Sheaf" in self.layer_type:
             x = self.sheaf_readout(x)
         return x, reff_per_layer

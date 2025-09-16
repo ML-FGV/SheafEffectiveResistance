@@ -1,0 +1,28 @@
+project: FlatBundle_OVSQ
+name: enzymes
+program: run_graph_classification.py
+method: grid
+
+metric:
+  name: avg_val_acc
+  goal: maximize
+
+parameters:
+  rewiring:
+    value: "None"
+  layer_type:
+    value: "GenSheaf"
+  d:
+    values: [2,3,4,5]
+  gnn_type:
+    values: ["GIN","SAGE","GCN"]
+  gnn_layers:
+    values: [1,2,3,4,5]
+
+command:
+  - ${env}
+  - "python"
+  - ${program}
+  - "--dataset=enzymes"
+  - ${args}
+
