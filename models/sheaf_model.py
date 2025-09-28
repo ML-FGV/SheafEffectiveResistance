@@ -56,14 +56,11 @@ class FlatGenSheafConv(MessagePassing):
         orth_trans (str, optional): Method to learn orthogonal maps. Options are
             :obj:`'householder'`, :obj:`'matrix_exp'`, :obj:`'cayley'`, or
             :obj:`'euler'`. The  :obj:`'euler'` method can only be used if stalk_dimension is 2 or 3. (default :obj:`'householder'`)
-        nsd_learner (bool, optional): Use the NSD sheaf learner (a linear layer) instead of an MLP/GNN. (default :obj:`True`)
         linear_emb (bool, optional): Use a linear+act embedding/readout when learning the sheaf. (default :obj:`True`)
         gnn_type (str, optional): Type of GNN to use for learning the sheaf. Options are
             :obj:`'SAGE'`, :obj:`'GCN'`, :obj:`'GAT'`, :obj:`'NNConv'`, :obj:`'SGC'`, or :obj:`'SumGNN'`. (default :obj:`'SAGE'`)
         gnn_layers (int, optional): Number of GNN layers to use for learning the sheaf. (default :obj:`1`)
         gnn_hidden (int, optional): Number of hidden channels in the GNN layers. (default :obj:`32`)
-        gnn_default (int, optional): Set this to 0 to use a custom GNN to learn the restriction maps.
-            To reproduce the experiments in the paper, use either 1 or 2. (default :obj:`False`)
         gnn_residual (bool, optional): Use residual connections in the GNN layers. (default :obj:`False`)
         pe_size (int, optional): Size of the positional encoding to use in the GNN layers. (default :obj:`0`)
     """
@@ -79,12 +76,10 @@ class FlatGenSheafConv(MessagePassing):
                  use_bias:        Optional[bool] = False,
                  sheaf_act:       Optional[str]  = 'tanh',
                  orth_trans:      Optional[str]  = 'householder',
-                 nsd_learner:     Optional[bool] = True,
                  linear_emb:      Optional[bool] = True,
                  gnn_type:        Optional[str]  = 'SAGE',
                  gnn_layers:      Optional[int]  = 1,
                  gnn_hidden:      Optional[int]  = 32,
-                 gnn_default:     Optional[bool] = False,
                  gnn_residual:    Optional[bool] = False,
                  pe_size:         Optional[int]  = 0,
                  ):
@@ -100,7 +95,6 @@ class FlatGenSheafConv(MessagePassing):
         self.use_eps = use_eps
         self.dropout = dropout
         self.orth_trans = orth_trans
-        self.nsd_learner = nsd_learner
 
         if in_channels != out_channels:
             assert right_weights, \
@@ -123,25 +117,17 @@ class FlatGenSheafConv(MessagePassing):
         else:
             self.lin_left_weights = nn.Identity()
         
-        if nsd_learner:
-            self.sheaf_learner = LocalConcatFlatSheafLearnerVariant(
-                self.d, self.in_channels,
+        self.sheaf_learner = FlatSheafLearner(
+                self.d,
+                self.in_channels,
                 out_shape = (self.d**2,),
+                linear_emb = linear_emb,
+                gnn_type = gnn_type,
+                gnn_layers = gnn_layers,
+                gnn_hidden = gnn_hidden,
+                gnn_residual = gnn_residual,
+                pe_size = pe_size,
                 sheaf_act = sheaf_act)
-
-        else:
-            self.sheaf_learner = ConformalSheafLearner(
-                    self.d,
-                    self.in_channels,
-                    out_shape = (self.d**2,),
-                    linear_emb = linear_emb,
-                    gnn_type = gnn_type,
-                    gnn_layers = gnn_layers,
-                    gnn_hidden = gnn_hidden,
-                    gnn_default = gnn_default,
-                    gnn_residual = gnn_residual,
-                    pe_size = pe_size,
-                    sheaf_act = sheaf_act)
         
         if use_eps and in_channels == out_channels:
             self.epsilons = nn.Parameter(torch.zeros((self.d, 1)))
@@ -237,7 +223,7 @@ class FlatGenSheafConv(MessagePassing):
         x = F.dropout(x, p=self.dropout, training=self.training)
         x_maps = x.reshape(self.graph_size, self.in_channels * self.d)
 
-        maps = self.sheaf_learner(x_maps) if self.nsd_learner else self.sheaf_learner(x_maps, edge_index)
+        maps = self.sheaf_learner(x_maps, edge_index)
 
         x = x.view(self.graph_size * self.d, -1)
         x0 = x
@@ -292,14 +278,11 @@ class FlatBundleConv(MessagePassing):
         orth_trans (str, optional): Method to learn orthogonal maps. Options are
             :obj:`'householder'`, :obj:`'matrix_exp'`, :obj:`'cayley'`, or
             :obj:`'euler'`. The  :obj:`'euler'` method can only be used if stalk_dimension is 2 or 3. (default :obj:`'householder'`)
-        nsd_learner (bool, optional): Use the NSD sheaf learner (a linear layer) instead of an MLP/GNN. (default :obj:`True`)
         linear_emb (bool, optional): Use a linear+act embedding/readout when learning the sheaf. (default :obj:`True`)
         gnn_type (str, optional): Type of GNN to use for learning the sheaf. Options are
             :obj:`'SAGE'`, :obj:`'GCN'`, :obj:`'GAT'`, :obj:`'NNConv'`, :obj:`'SGC'`, or :obj:`'SumGNN'`. (default :obj:`'SAGE'`)
         gnn_layers (int, optional): Number of GNN layers to use for learning the sheaf. (default :obj:`1`)
         gnn_hidden (int, optional): Number of hidden channels in the GNN layers. (default :obj:`32`)
-        gnn_default (int, optional): Set this to 0 to use a custom GNN to learn the restriction maps.
-            To reproduce the experiments in the paper, use either 1 or 2. (default :obj:`False`)
         gnn_residual (bool, optional): Use residual connections in the GNN layers. (default :obj:`False`)
         pe_size (int, optional): Size of the positional encoding to use in the GNN layers. (default :obj:`0`)
     """
@@ -315,12 +298,10 @@ class FlatBundleConv(MessagePassing):
                  use_bias:        Optional[bool] = False,
                  sheaf_act:       Optional[str]  = 'tanh',
                  orth_trans:      Optional[str]  = 'householder',
-                 nsd_learner:     Optional[bool] = True,
                  linear_emb:      Optional[bool] = True,
                  gnn_type:        Optional[str]  = 'SAGE',
                  gnn_layers:      Optional[int]  = 1,
                  gnn_hidden:      Optional[int]  = 32,
-                 gnn_default:     Optional[bool] = False,
                  gnn_residual:    Optional[bool] = False,
                  pe_size:         Optional[int]  = 0,
                  ):
@@ -336,7 +317,6 @@ class FlatBundleConv(MessagePassing):
         self.use_eps = use_eps
         self.dropout = dropout
         self.orth_trans = orth_trans
-        self.nsd_learner = nsd_learner
 
         if in_channels != out_channels:
             assert right_weights, \
@@ -362,25 +342,17 @@ class FlatBundleConv(MessagePassing):
         self.orth_transform = Orthogonal(d=self.d,
                                          orthogonal_map=orth_trans)
         
-        if nsd_learner:
-            self.sheaf_learner = LocalConcatFlatSheafLearnerVariant(
-                self.d, self.in_channels,
+        self.sheaf_learner = FlatSheafLearner(
+                self.d,
+                self.in_channels,
                 out_shape = (self.get_param_size(),),
+                linear_emb = linear_emb,
+                gnn_type = gnn_type,
+                gnn_layers = gnn_layers,
+                gnn_hidden = gnn_hidden,
+                gnn_residual = gnn_residual,
+                pe_size = pe_size,
                 sheaf_act = sheaf_act)
-
-        else:
-            self.sheaf_learner = ConformalSheafLearner(
-                    self.d,
-                    self.in_channels,
-                    out_shape = (self.get_param_size(),),
-                    linear_emb = linear_emb,
-                    gnn_type = gnn_type,
-                    gnn_layers = gnn_layers,
-                    gnn_hidden = gnn_hidden,
-                    gnn_default = gnn_default,
-                    gnn_residual = gnn_residual,
-                    pe_size = pe_size,
-                    sheaf_act = sheaf_act)
         
         if use_eps and in_channels == out_channels:
             self.epsilons = nn.Parameter(torch.zeros((self.d, 1)))
@@ -457,7 +429,7 @@ class FlatBundleConv(MessagePassing):
         x = F.dropout(x, p=self.dropout, training=self.training)
         x_maps = x.reshape(self.graph_size, self.in_channels * self.d)
 
-        maps = self.sheaf_learner(x_maps) if self.nsd_learner else self.sheaf_learner(x_maps, edge_index)
+        maps = self.sheaf_learner(x_maps, edge_index)
 
         x = x.view(self.graph_size * self.d, -1)
         x0 = x
@@ -580,7 +552,7 @@ class SumGNN(MessagePassing):
     def message(self, x_j):
         return x_j
 
-class ConformalSheafLearner(nn.Module):
+class FlatSheafLearner(nn.Module):
     """Learns a conformal sheaf passing node features through a GNN or MLP + activation."""
 
     def __init__(self, d:         int,
@@ -590,11 +562,10 @@ class ConformalSheafLearner(nn.Module):
                  gnn_type:        str,
                  gnn_layers:      int,
                  gnn_hidden:      int,
-                 gnn_default:     bool,
                  gnn_residual:    bool,
                  pe_size:         int,
                  sheaf_act:       str = 'tanh'):
-        super(ConformalSheafLearner, self).__init__()
+        super(FlatSheafLearner, self).__init__()
         
         assert len(out_shape) in [1, 2]
         assert (gnn_type, gnn_residual) != ('SGC', True), "SGC does not support residual connections."
@@ -603,7 +574,6 @@ class ConformalSheafLearner(nn.Module):
         self.hidden_channels = hidden_channels
         self.gnn_layers = gnn_layers
         self.residual = gnn_residual
-        self.gnn_default = gnn_default
         self.linear_emb = linear_emb
         self.gnn_hidden = gnn_hidden
         self.layer_type = gnn_type
@@ -627,39 +597,15 @@ class ConformalSheafLearner(nn.Module):
 
         if gnn_layers > 0:
             self.gnn = self.get_layer_type(gnn_type)
-            if gnn_default == 1:
-                self.phi = GraphSAGE(
-                    hidden_channels * d + pe_size,
-                    gnn_hidden,
-                    num_layers=gnn_layers,
-                    out_channels=out_channels,
-                    norm='layer',
-                    )
-            elif gnn_default == 2:
-                self.phi = GraphSAGE(
-                    hidden_channels * d + pe_size,
-                    gnn_hidden,
-                    num_layers=gnn_layers,
-                    out_channels=out_channels,
-                    dropout=0.2,
-                    act='gelu',
-                    project=True,
-                    bias=True,
-                    )
+            if linear_emb:
+                self.emb1 = nn.Linear((hidden_channels + pe_size) * d, gnn_hidden)
+                self.phi = self.gnn_builder(gnn_type, gnn_hidden, gnn_hidden, gnn_layers)
+                self.emb2 = nn.Linear(gnn_hidden, out_channels)
             else:
-                if linear_emb:
-                    self.emb1 = nn.Linear((hidden_channels + pe_size) * d, gnn_hidden)
-                    self.phi = self.gnn_builder(gnn_type, gnn_hidden, gnn_hidden, gnn_layers)
-                    self.emb2 = nn.Linear(gnn_hidden, out_channels)
-                else:
-                    self.phi = self.gnn_builder(gnn_type, (hidden_channels + pe_size) * d, out_channels, gnn_layers, gnn_hidden)
+                self.phi = self.gnn_builder(gnn_type, (hidden_channels + pe_size) * d, out_channels, gnn_layers, gnn_hidden)
 
         else:
-            self.phi = nn.Sequential(
-                nn.Linear((hidden_channels + pe_size) * d, gnn_hidden),
-                nn.ReLU(),
-                nn.Linear(gnn_hidden, out_channels)
-            )
+            self.phi = torch.nn.Linear(hidden_channels, int(np.prod(out_shape)), bias=False)
 
     def get_layer_type(self, layer_type):
         if layer_type == 'GCN':
@@ -737,12 +683,7 @@ class ConformalSheafLearner(nn.Module):
         
         if self.gnn_layers > 0:
             sig = inspect.signature(self.gnn.forward)
-
-        if self.gnn_layers > 0:
-            sig = inspect.signature(self.gnn.forward)
-            if self.gnn_default:
-                maps = self.phi(maps, edge_index)
-            elif self.linear_emb:
+            if self.linear_emb:
                 maps = self.emb1(maps)
                 maps = F.gelu(maps)
                 if self.layer_type != 'SGC':
@@ -778,6 +719,7 @@ class ConformalSheafLearner(nn.Module):
                             maps = layer(maps, edge_index)
                             maps = F.gelu(maps) if layer != self.phi[-1] else maps
         else:
+            maps = maps.view(-1, self.d, self.hidden_channels).sum(dim=1)
             maps = self.phi(maps)
 
         return self.act(maps)

@@ -36,5 +36,6 @@ def get_args_from_input():
 	parser.add_argument('--d', type=int, help='dimension of stalks for sheaf models')
 	parser.add_argument('--gnn_type', type=str, help='type of GNN to learn restriction maps')
 	parser.add_argument('--gnn_layers', type=int, help='number of layers of GNN used to learn restriction maps')
+	parser.add_argument('--linear_emb', type=bool, help='whether or not to use linear embedding for sheaf models')
 	arg_values = parser.parse_args()
 	return AttrDict(vars(arg_values))

@@ -96,8 +96,7 @@ class GNN(torch.nn.Module):
                                   out_channels=out_features,
                                   stalk_dimension=self.args.d,
                                   dropout=self.args.dropout,
-                                  nsd_learner=False,
-                                  linear_emb=True,
+                                  linear_emb=self.args.linear_emb,
                                   gnn_type=self.args.gnn_type,
                                   gnn_layers=self.args.gnn_layers,
                                   gnn_hidden=self.args.hidden_dim)
@@ -106,8 +105,7 @@ class GNN(torch.nn.Module):
                                   out_channels=out_features,
                                   stalk_dimension=self.args.d,
                                   dropout=self.args.dropout,
-                                  nsd_learner=False,
-                                  linear_emb=True,
+                                  linear_emb=self.args.linear_emb,
                                   gnn_type=self.args.gnn_type,
                                   gnn_layers=self.args.gnn_layers,
                                   gnn_hidden=self.args.hidden_dim)
