@@ -41,6 +41,10 @@ def log_to_file(message, filename="results/node_classification.txt"):
     file.close()
 
 default_args = AttrDict({
+    "d": 5,
+    "gnn_type": "GIN",
+    "gnn_layers": 1,
+    "linear_emb": False,
     "dropout": 0.5,
     "num_layers": 3,
     "hidden_dim": 128,
@@ -55,7 +59,6 @@ default_args = AttrDict({
     "patience": 100,
     "dataset": None
     })
-
 
 results = []
 args = default_args

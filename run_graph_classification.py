@@ -65,6 +65,10 @@ def log_to_file(message, filename="results/graph_classification.txt"):
     file.close()
 
 default_args = AttrDict({
+    "d": 5,
+    "gnn_type": "GIN",
+    "gnn_layers": 1,
+    "linear_emb": False,
     "dropout": 0.0,
     "num_layers": 4,
     "hidden_dim": 64,
@@ -82,12 +86,6 @@ default_args = AttrDict({
     "dataset": None,
     "last_layer_fa": False
     })
-
-sheaf_args = AttrDict({
-    "d": 5,
-    "gnn_type": "GIN",
-    "gnn_layers": 1
-})
 
 hyperparams = {
     "mutag": AttrDict({"output_dim": 2}),
